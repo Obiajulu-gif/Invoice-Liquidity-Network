@@ -6,21 +6,44 @@ jobs:
   e2e-tests:
     runs-on: namespace-profile-nursca
     if: vars.RUN_E2E == 'true'
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ~/.cache/ms-playwright
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Start Local Stellar Node
         run: docker compose up -d
-        
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 18
-          
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Restore Playwright browser cache
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-e2e-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-e2e-
+            ${{ runner.os }}-playwright-
+
       - name: Wait for RPC
-        run: sleep 15 
-        
-      - name: Install & Run
-        run: |
-          npm install
-          npm run test:e2e
+        run: sleep 15
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps
+
+      - name: Install Playwright browsers and system dependencies
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps
+
+      - name: Run E2E tests
+        run: npm run test:e2e
