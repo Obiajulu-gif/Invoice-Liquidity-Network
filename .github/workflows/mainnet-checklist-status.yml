@@ -11,8 +11,18 @@ permissions:
   issues: read
 
 jobs:
+  parser-tests:
+    name: Test checklist parser
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run fixture-based parser tests
+        run: node --test scripts/mainnet-checklist-status.test.cjs
+
   update-checklist:
     name: Update checklist statuses
+    needs: parser-tests
     runs-on: namespace-profile-nursca
 
     steps:
@@ -24,50 +34,53 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const path = 'docs/mainnet-launch-checklist.md';
-            let content = fs.readFileSync(path, 'utf8');
-            const repoUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/issues/`;
-            const issueNumbers = [...content.matchAll(new RegExp(`${repoUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)`, 'g'))]
-              .map((match) => Number(match[1]));
-            const uniqueIssueNumbers = [...new Set(issueNumbers)];
-            const closedIssues = new Set();
+            const {
+              issueNumbersForRepository,
+              updateClosedIssueRows,
+              auditChecklist,
+            } = require('./scripts/mainnet-checklist-status.cjs');
 
-            for (const issue_number of uniqueIssueNumbers) {
+            const checklistPath = 'docs/mainnet-launch-checklist.md';
+            const content = fs.readFileSync(checklistPath, 'utf8');
+            const issueNumbers = issueNumbersForRepository(
+              content,
+              context.repo.owner,
+              context.repo.repo,
+            );
+            const issueStates = new Map();
+
+            for (const issue_number of issueNumbers) {
               const { data } = await github.rest.issues.get({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number,
               });
-
-              if (data.state === 'closed') {
-                closedIssues.add(issue_number);
-              }
+              issueStates.set(issue_number, data.state);
             }
 
-            const updated = content
-              .split('\n')
-              .map((line) => {
-                if (!line.startsWith('|') || !line.includes(repoUrl)) {
-                  return line;
-                }
+            const audit = auditChecklist(
+              content,
+              context.repo.owner,
+              context.repo.repo,
+              issueStates,
+            );
+            const stale = audit.filter((item) => !item.accurate);
+            core.info(`Checked ${audit.length} linked checklist rows; ${stale.length} need updates.`);
+            core.setOutput('checked_rows', audit.length);
+            core.setOutput('stale_rows', stale.length);
 
-                const issueMatch = line.match(new RegExp(`${repoUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)`));
-                if (!issueMatch || !closedIssues.has(Number(issueMatch[1]))) {
-                  return line;
-                }
-
-                const cells = line.split('|');
-                if (cells.length < 6) {
-                  return line;
-                }
-
-                cells[4] = ' Done ';
-                return cells.join('|');
-              })
-              .join('\n');
+            const closedIssues = [...issueStates.entries()]
+              .filter(([, state]) => state === 'closed')
+              .map(([issueNumber]) => issueNumber);
+            const updated = updateClosedIssueRows(
+              content,
+              context.repo.owner,
+              context.repo.repo,
+              closedIssues,
+            );
 
             if (updated !== content) {
-              fs.writeFileSync(path, updated);
+              fs.writeFileSync(checklistPath, updated);
             }
 
       - name: Create pull request
@@ -78,6 +91,6 @@ jobs:
           body: |
             Automated update from the Mainnet Checklist Status workflow.
 
-            Rows linked to closed issues were marked as `Done`.
+            Rows linked to closed issues were marked as `Done` after the tested parser audited the current checklist.
           branch: automation/mainnet-checklist-status
           delete-branch: true
