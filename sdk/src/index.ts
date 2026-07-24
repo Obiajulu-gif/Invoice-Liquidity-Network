@@ -15,6 +15,7 @@ export * from "./compatibility";
 export * from "./federation";
 export * from "./governance";
 export * from "./errors";
+export * from "./error-normalization";
 export * from "./offline";
 export * from "./event-emitter";
 export * from "./recovery";
