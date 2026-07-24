@@ -63,7 +63,8 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Stellar CLI (cargo install)
+      - name: Cache Stellar CLI and Cargo build data
+        id: stellar-cli-cache
         uses: actions/cache@v4
         with:
           path: |
@@ -71,11 +72,18 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: ${{ runner.os }}-stellar-cli-${{ inputs.stellar-cli-features }}
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            target/stellar-cli-install/
+          key: ${{ runner.os }}-stellar-cli-${{ inputs.stellar-cli-features }}-v1
           restore-keys: |
+            ${{ runner.os }}-stellar-cli-${{ inputs.stellar-cli-features }}-
             ${{ runner.os }}-stellar-cli-
 
       - name: Install Stellar CLI
+        if: steps.stellar-cli-cache.outputs.cache-hit != 'true'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/stellar-cli-install
         run: cargo install --locked stellar-cli --features ${{ inputs.stellar-cli-features }}
 
       - name: Configure Stellar network
