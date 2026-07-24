@@ -8,6 +8,8 @@ jobs:
   e2e-tests:
     runs-on: namespace-profile-nursca
     timeout-minutes: 30
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ~/.cache/ms-playwright
     steps:
       - uses: actions/checkout@v4
 
@@ -25,6 +27,16 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: "9.0.0"
+
+      - name: Restore Playwright browser cache
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-frontend-${{ hashFiles('frontend/package-lock.json', 'frontend/pnpm-lock.yaml', 'pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-frontend-
+            ${{ runner.os }}-playwright-
 
       - name: Wait for Stellar RPC
         run: |
@@ -47,7 +59,13 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Install Playwright Browsers
+      - name: Install Playwright system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        working-directory: frontend
+        run: npx playwright install-deps
+
+      - name: Install Playwright browsers and system dependencies
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         working-directory: frontend
         run: npx playwright install --with-deps
 
