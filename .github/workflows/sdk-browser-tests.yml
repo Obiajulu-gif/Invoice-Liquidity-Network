@@ -11,6 +11,8 @@ on:
 jobs:
   browser-tests:
     runs-on: namespace-profile-nursca
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ~/.cache/ms-playwright
     defaults:
       run:
         working-directory: packages/sdk
@@ -27,10 +29,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Restore Playwright browser cache
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-sdk-${{ hashFiles('packages/sdk/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-sdk-
+            ${{ runner.os }}-playwright-
+
       - name: Build browser bundle
         run: npm run build:browser
 
-      - name: Install Playwright browsers
+      - name: Install Playwright system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium firefox webkit
+
+      - name: Install Playwright browsers and system dependencies
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium firefox webkit
 
       - name: Run browser compatibility tests
