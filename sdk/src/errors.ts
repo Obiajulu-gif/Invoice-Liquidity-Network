@@ -1,274 +1,332 @@
-/**
- * Base error class for all ILN SDK errors.
- *
- * Provides structured error codes and remediation guidance.
- */
+const DEFAULT_DOCS_BASE_URL =
+  'https://github.com/Invoice-Liquidity-Network/Invoice-Liquidity-Network/blob/main/docs/errors.md';
+
+export const ILN_ERROR_CODES = {
+  INVALID_DISCOUNT_RATE: 'INVALID_DISCOUNT_RATE',
+  TOKEN_MISMATCH: 'TOKEN_MISMATCH',
+  PAYER_REPUTATION_TOO_LOW: 'PAYER_REPUTATION_TOO_LOW',
+  INSUFFICIENT_BALANCE: 'INSUFFICIENT_BALANCE',
+  NETWORK_ERROR: 'NETWORK_ERROR',
+  TRANSACTION_FAILED: 'TRANSACTION_FAILED',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  WALLET_NOT_CONNECTED: 'WALLET_NOT_CONNECTED',
+  CONTRACT_ERROR: 'CONTRACT_ERROR',
+  SIMULATION_FAILED: 'SIMULATION_FAILED',
+  UNKNOWN_ERROR: 'UNKNOWN_ERROR',
+} as const;
+
+export type ILNErrorCode = (typeof ILN_ERROR_CODES)[keyof typeof ILN_ERROR_CODES];
+export type ILNErrorContext = Record<string, unknown>;
+
+export interface ILNErrorOptions {
+  docsUrl?: string;
+  context?: ILNErrorContext;
+  retryable?: boolean;
+  cause?: unknown;
+}
+
+function docsUrlFor(code: ILNErrorCode): string {
+  return `${DEFAULT_DOCS_BASE_URL}#${code.toLowerCase().replaceAll('_', '-')}`;
+}
+
+function serialiseUnknown(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+/** Base error class returned by all consumer-facing SDK error paths. */
 export class ILNError extends Error {
-  /** Machine-readable error code (e.g. "INSUFFICIENT_BALANCE"). */
-  public code: string;
-  /** Human-readable suggestion for resolving the error. */
-  public remediation: string;
-  /** Optional documentation URL for this error code. */
-  public docsUrl?: string;
-  /** Optional structured debugging context (never include secrets). */
-  public context?: Record<string, unknown>;
-  /** Whether the operation is likely retryable. */
-  public retryable?: boolean;
-  /** Preserve original error for debugging. */
-  public cause?: unknown;
+  public readonly code: ILNErrorCode;
+  public readonly remediation: string;
+  public readonly docsUrl: string;
+  public readonly context: ILNErrorContext;
+  public readonly retryable: boolean;
+  public override readonly cause?: unknown;
 
   constructor(
     message: string,
-    code: string,
+    code: ILNErrorCode,
     remediation: string,
-    options?: {
-      docsUrl?: string;
-      context?: Record<string, unknown>;
-      retryable?: boolean;
-      cause?: unknown;
-    },
+    options: ILNErrorOptions = {},
   ) {
-    super(message);
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
     Object.setPrototypeOf(this, new.target.prototype);
     this.name = this.constructor.name;
     this.code = code;
     this.remediation = remediation;
+    this.docsUrl = options.docsUrl ?? docsUrlFor(code);
+    this.context = options.context ?? {};
+    this.retryable = options.retryable ?? false;
+    this.cause = options.cause;
+  }
 
-    if (options?.docsUrl) this.docsUrl = options.docsUrl;
-    if (options?.context) this.context = options.context;
-    if (typeof options?.retryable === 'boolean') this.retryable = options.retryable;
-    if (options && 'cause' in options) this.cause = options.cause;
+  /** JSON-safe representation suitable for logs, API responses, and telemetry. */
+  toJSON(): Record<string, unknown> {
+    return {
+      name: this.name,
+      code: this.code,
+      message: this.message,
+      remediation: this.remediation,
+      docsUrl: this.docsUrl,
+      context: this.context,
+      retryable: this.retryable,
+    };
   }
 }
 
-const DEFAULT_DOCS_BASE_URL =
-  'https://github.com/Invoice-Liquidity-Network/Invoice-Liquidity-Network/blob/main/docs/errors.md';
-
-function withDocs(code: string): string {
-  // Link to an anchor on docs/errors.md for programmatic navigation.
-  return `${DEFAULT_DOCS_BASE_URL}#${code}`;
-}
-
-/**
- * Thrown when the provided discount rate exceeds protocol limits.
- */
 export class InvalidDiscountRateError extends ILNError {
-  constructor(context?: Record<string, unknown>) {
+  constructor(context: ILNErrorContext = {}, cause?: unknown) {
     super(
-      "Invalid discount rate.",
-      "INVALID_DISCOUNT_RATE",
-      "Check `discountRate` is within the protocol bounds (see `getProtocolConfig().maxDiscountRate`). If you are using basis points, ensure the value is in bps (e.g., 300 = 3%).",
-      {
-        docsUrl: withDocs("INVALID_DISCOUNT_RATE"),
-        context,
-        retryable: false,
-      },
+      'Invalid discount rate.',
+      ILN_ERROR_CODES.INVALID_DISCOUNT_RATE,
+      'Check that discountRate is within the protocol bounds and is expressed in basis points (300 = 3%).',
+      { context, retryable: false, cause },
     );
-    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-/**
- * Thrown when a token mismatch occurs in a transaction.
- */
 export class TokenMismatchError extends ILNError {
-  constructor(context?: Record<string, unknown>) {
+  constructor(context: ILNErrorContext = {}, cause?: unknown) {
     super(
       'Token mismatch in transaction.',
-      'TOKEN_MISMATCH',
-      'Verify that the token contract ID/address used to build the transaction matches the token configured for the invoice/protocol. (If you call `getInvoice()` / `getProtocolConfig()`, compare the expected token information.)',
-      {
-        docsUrl: withDocs('TOKEN_MISMATCH'),
-        context,
-        retryable: false,
-      },
+      ILN_ERROR_CODES.TOKEN_MISMATCH,
+      'Use the token contract configured for the invoice and protocol network, then rebuild the transaction.',
+      { context, retryable: false, cause },
     );
-    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-/**
- * Thrown when the payer's reputation score is below the protocol minimum.
- */
 export class PayerReputationTooLowError extends ILNError {
-  constructor(context?: Record<string, unknown>) {
+  constructor(context: ILNErrorContext = {}, cause?: unknown) {
     super(
       'Payer reputation is too low.',
-      'PAYER_REPUTATION_TOO_LOW',
-      'The payer does not meet the protocol minimum reputation threshold for this invoice. Check the payer reputation score and re-submit with an eligible payer.',
-      {
-        docsUrl: withDocs('PAYER_REPUTATION_TOO_LOW'),
-        context,
-        retryable: false,
-      },
+      ILN_ERROR_CODES.PAYER_REPUTATION_TOO_LOW,
+      'Check the payer reputation score and submit the invoice with a payer that meets the protocol threshold.',
+      { context, retryable: false, cause },
     );
-    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-/**
- * Thrown when the account has insufficient balance for a transaction.
- */
 export class InsufficientBalanceError extends ILNError {
   constructor(
     message = 'Insufficient balance to complete the transaction.',
-    remediation = 'Ensure the account has enough funds (including transaction fees) before retrying. If you are on testnet, you can fund the account and then re-submit.',
-    context?: Record<string, unknown>,
+    remediation = 'Ensure the account has enough token balance and XLM for fees, then retry.',
+    context: ILNErrorContext = {},
+    cause?: unknown,
   ) {
-    super(message, 'INSUFFICIENT_BALANCE', remediation, {
-      docsUrl: withDocs('INSUFFICIENT_BALANCE'),
+    super(message, ILN_ERROR_CODES.INSUFFICIENT_BALANCE, remediation, {
       context,
       retryable: true,
+      cause,
     });
-    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-/**
- * Thrown when a network request to the RPC server fails.
- */
 export class NetworkError extends ILNError {
   constructor(
     message = 'Network request failed.',
-    remediation = 'Failed to reach the configured Stellar RPC endpoint. Verify your `rpcUrl`, check connectivity, and ensure the RPC server is healthy.',
-    context?: Record<string, unknown>,
+    remediation = 'Verify the configured Horizon and Soroban RPC URLs, connectivity, and service health, then retry.',
+    context: ILNErrorContext = {},
+    cause?: unknown,
   ) {
-    super(message, 'NETWORK_ERROR', remediation, {
-      docsUrl: withDocs('NETWORK_ERROR'),
+    super(message, ILN_ERROR_CODES.NETWORK_ERROR, remediation, {
       context,
       retryable: true,
+      cause,
     });
-    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-/**
- * Thrown when a transaction fails to execute on-chain.
- */
 export class TransactionFailedError extends ILNError {
   constructor(
     message = 'Transaction execution failed on-chain.',
-    remediation = 'The contract rejected the transaction. Review the simulation/tx failure reason, verify the invoice state (e.g., funded/paid/defaulted), and confirm fee/resource settings. If you are using a batch, try isolating the failing operation.',
-    context?: Record<string, unknown>,
+    remediation = 'Inspect the transaction result and invoice state, correct the rejected operation, and submit a new transaction.',
+    context: ILNErrorContext = {},
+    cause?: unknown,
   ) {
-    super(message, 'TRANSACTION_FAILED', remediation, {
-      docsUrl: withDocs('TRANSACTION_FAILED'),
+    super(message, ILN_ERROR_CODES.TRANSACTION_FAILED, remediation, {
       context,
       retryable: false,
+      cause,
     });
-    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-/**
- * Thrown when input validation fails.
- */
 export class ValidationError extends ILNError {
   constructor(
     message = 'Validation failed.',
-    remediation = 'Check the provided input parameters. Use `Validators` to validate fields and inspect which constraint failed.',
-    context?: Record<string, unknown>,
+    remediation = 'Check the supplied parameters and use the SDK validators to identify the invalid field.',
+    context: ILNErrorContext = {},
+    cause?: unknown,
   ) {
-    super(message, 'VALIDATION_ERROR', remediation, {
-      docsUrl: withDocs('VALIDATION_ERROR'),
+    super(message, ILN_ERROR_CODES.VALIDATION_ERROR, remediation, {
       context,
       retryable: false,
+      cause,
     });
-    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-/**
- * Thrown when a wallet is required but not connected.
- */
 export class WalletNotConnectedError extends ILNError {
   constructor(
     message = 'Wallet is not connected.',
-    remediation = 'A transaction signer is required for this state-changing operation. Provide a `signer` in the `ILNSdk` configuration (or ensure the Freighter signer is available in browser).',
-    context?: Record<string, unknown>,
+    remediation = 'Provide a signer in the ILNSdk configuration or connect and unlock the browser wallet.',
+    context: ILNErrorContext = {},
+    cause?: unknown,
   ) {
-    super(message, 'WALLET_NOT_CONNECTED', remediation, {
-      docsUrl: withDocs('WALLET_NOT_CONNECTED'),
+    super(message, ILN_ERROR_CODES.WALLET_NOT_CONNECTED, remediation, {
       context,
       retryable: false,
+      cause,
     });
-    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-/**
- * Thrown for generic contract errors that don't match specific error types.
- */
 export class GenericContractError extends ILNError {
-  constructor(rawError: string, context?: Record<string, unknown>) {
+  constructor(rawError: string, context: ILNErrorContext = {}, cause?: unknown) {
     super(
       `Contract error: ${rawError}`,
-      'CONTRACT_ERROR',
-      'The contract rejected the transaction, but the SDK could not classify the exact failure reason. Check the invoice/operation parameters and inspect the on-chain error details. If possible, retry with corrected inputs or consult the contract logic/state.',
+      ILN_ERROR_CODES.CONTRACT_ERROR,
+      'Inspect the raw contract error and invoice state, correct the operation inputs, and retry only after the cause is understood.',
       {
-        docsUrl: withDocs('CONTRACT_ERROR'),
-        context: {
-          rawError,
-          ...(context ?? {}),
-        },
+        context: { rawContractError: rawError, ...context },
         retryable: false,
+        cause,
       },
     );
-    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
 export class SimulationError extends ILNError {
   constructor(
     message = 'Transaction simulation failed.',
-    remediation = 'The SDK could not simulate the transaction successfully. Review the transaction parameters and ensure contract state is consistent (e.g., the invoice exists and is in the expected state). Then retry.',
-    context?: Record<string, unknown>,
+    remediation = 'Review the simulated operation, account state, contract state, and resource limits before retrying.',
+    context: ILNErrorContext = {},
+    cause?: unknown,
   ) {
-    super(message, 'SIMULATION_FAILED', remediation, {
-      docsUrl: withDocs('SIMULATION_FAILED'),
+    super(message, ILN_ERROR_CODES.SIMULATION_FAILED, remediation, {
       context,
       retryable: false,
+      cause,
     });
-    Object.setPrototypeOf(this, new.target.prototype);
   }
+}
+
+export class UnknownSDKError extends ILNError {
+  constructor(message: string, context: ILNErrorContext = {}, cause?: unknown) {
+    super(
+      message,
+      ILN_ERROR_CODES.UNKNOWN_ERROR,
+      'Inspect the original error and context. If it persists, report it with the SDK version and network.',
+      { context, retryable: false, cause },
+    );
+  }
+}
+
+interface ContractErrorMatcher {
+  signature: string;
+  create: (context: ILNErrorContext, cause: unknown) => ILNError;
+}
+
+const CONTRACT_ERROR_MATCHERS: readonly ContractErrorMatcher[] = [
+  {
+    signature: 'InvalidDiscountRate',
+    create: (context, cause) => new InvalidDiscountRateError(context, cause),
+  },
+  {
+    signature: 'TokenMismatch',
+    create: (context, cause) => new TokenMismatchError(context, cause),
+  },
+  {
+    signature: 'PayerReputationTooLow',
+    create: (context, cause) => new PayerReputationTooLowError(context, cause),
+  },
+];
+
+/** Convert a raw Soroban/contract failure into a typed ILNError. */
+export function parseContractError(contractError: unknown): ILNError {
+  const rawContractError = serialiseUnknown(contractError);
+  const matched = CONTRACT_ERROR_MATCHERS.find(({ signature }) =>
+    rawContractError.includes(signature),
+  );
+  const context: ILNErrorContext = {
+    rawContractError,
+    matchedSignature: matched?.signature ?? null,
+  };
+
+  return matched
+    ? matched.create(context, contractError)
+    : new GenericContractError(rawContractError, context, contractError);
+}
+
+export interface NormalizeErrorOptions {
+  operation?: string;
+  context?: ILNErrorContext;
+  retryable?: boolean;
+  assumeContractError?: boolean;
 }
 
 /**
- * Parse a raw contract error into a typed ILNError.
- * Maps known error strings to specific error classes when possible.
- *
- * @param xdrError - The raw error value from the contract.
- * @returns A typed ILNError instance.
- *
- * @example
- * ```ts
- * try {
- *   await sdk.submitInvoice(params);
- * } catch (err) {
- *   const ilnError = parseContractError(err);
- *   console.log(ilnError.code);    // e.g. "INVALID_DISCOUNT_RATE"
- *   console.log(ilnError.remediation);
- * }
- * ```
+ * Normalise every unknown consumer-facing failure into the stable ILNError shape.
+ * Existing ILNError instances retain their code while receiving call-site context.
  */
-export function parseContractError(xdrError: unknown): ILNError {
-  const errorStr = typeof xdrError === 'string' ? xdrError : JSON.stringify(xdrError);
+export function normalizeError(
+  error: unknown,
+  options: NormalizeErrorOptions = {},
+): ILNError {
+  const callContext = {
+    ...(options.operation ? { operation: options.operation } : {}),
+    ...(options.context ?? {}),
+  };
 
-  const baseContext = {
-    rawError: errorStr,
-  } as Record<string, unknown>;
-
-  if (errorStr.includes('InvalidDiscountRate')) {
-    return new InvalidDiscountRateError({ ...baseContext, matchedPattern: 'InvalidDiscountRate' });
-  }
-  if (errorStr.includes('TokenMismatch')) {
-    return new TokenMismatchError({ ...baseContext, matchedPattern: 'TokenMismatch' });
-  }
-  if (errorStr.includes('PayerReputationTooLow')) {
-    return new PayerReputationTooLowError({ ...baseContext, matchedPattern: 'PayerReputationTooLow' });
+  if (error instanceof ILNError) {
+    if (Object.keys(callContext).length === 0 && options.retryable === undefined) return error;
+    return new ILNError(error.message, error.code, error.remediation, {
+      docsUrl: error.docsUrl,
+      context: { ...error.context, ...callContext },
+      retryable: options.retryable ?? error.retryable,
+      cause: error.cause ?? error,
+    });
   }
 
-  return new GenericContractError(errorStr, {
-    matchedPattern: 'Unknown',
-  });
+  const rawError = serialiseUnknown(error);
+  const lower = rawError.toLowerCase();
+
+  if (
+    options.assumeContractError ||
+    CONTRACT_ERROR_MATCHERS.some(({ signature }) => rawError.includes(signature)) ||
+    lower.includes('contracterror') ||
+    lower.includes('hostfunction')
+  ) {
+    const parsed = parseContractError(error);
+    return normalizeError(parsed, { ...options, assumeContractError: false });
+  }
+
+  if (
+    lower.includes('econnrefused') ||
+    lower.includes('enotfound') ||
+    lower.includes('network') ||
+    lower.includes('fetch failed') ||
+    lower.includes('timeout')
+  ) {
+    return new NetworkError(rawError, undefined, { rawError, ...callContext }, error);
+  }
+
+  if (lower.includes('insufficient') && lower.includes('balance')) {
+    return new InsufficientBalanceError(rawError, undefined, { rawError, ...callContext }, error);
+  }
+
+  if (error instanceof TypeError || lower.includes('invalid') || lower.includes('required')) {
+    return new ValidationError(rawError, undefined, { rawError, ...callContext }, error);
+  }
+
+  return new UnknownSDKError(rawError || 'Unknown SDK error.', { rawError, ...callContext }, error);
 }
+
+/** Backwards-compatible explicit alias for normalizeError(). */
+export const toILNError = normalizeError;
