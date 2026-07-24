@@ -1,119 +1,140 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from 'vitest';
 import {
-  parseContractError,
-  InvalidDiscountRateError,
-  TokenMismatchError,
-  PayerReputationTooLowError,
   GenericContractError,
+  ILN_ERROR_CODES,
+  ILNError,
   InsufficientBalanceError,
+  InvalidDiscountRateError,
   NetworkError,
+  PayerReputationTooLowError,
+  TokenMismatchError,
   TransactionFailedError,
+  UnknownSDKError,
   ValidationError,
   WalletNotConnectedError,
-  ILNError,
-} from "./errors";
+  normalizeError,
+  parseContractError,
+  toILNError,
+} from './errors';
 
-describe("Error Mapping SDK", () => {
-  it("maps InvalidDiscountRate", () => {
-    const err = parseContractError("Error: InvalidDiscountRate");
-    expect(err).toBeInstanceOf(InvalidDiscountRateError);
-    expect(err.code).toBe("INVALID_DISCOUNT_RATE");
+const allErrors = [
+  new InvalidDiscountRateError(),
+  new TokenMismatchError(),
+  new PayerReputationTooLowError(),
+  new InsufficientBalanceError(),
+  new NetworkError(),
+  new TransactionFailedError(),
+  new ValidationError(),
+  new WalletNotConnectedError(),
+  new GenericContractError('unknown'),
+  new UnknownSDKError('unknown'),
+];
+
+describe('structured SDK errors', () => {
+  it('gives every public error a unique code and documentation URL', () => {
+    const codes = allErrors.map((error) => error.code);
+    expect(new Set(codes).size).toBe(codes.length);
+    expect(new Set(Object.values(ILN_ERROR_CODES)).size).toBe(
+      Object.values(ILN_ERROR_CODES).length,
+    );
+
+    for (const error of allErrors) {
+      expect(error).toBeInstanceOf(ILNError);
+      expect(error.docsUrl).toContain('docs/errors.md');
+      expect(error.docsUrl).toContain(error.code.toLowerCase().replaceAll('_', '-'));
+      expect(error.remediation.length).toBeGreaterThan(20);
+      expect(typeof error.retryable).toBe('boolean');
+    }
   });
-  it("maps TokenMismatch", () => {
-    const err = parseContractError("Error: TokenMismatch");
-    expect(err).toBeInstanceOf(TokenMismatchError);
+
+  it('preserves structured context and produces JSON-safe output', () => {
+    const error = new ValidationError(
+      'payer is required',
+      undefined,
+      { field: 'payer', invoiceId: '42' },
+    );
+
+    expect(error.context).toEqual({ field: 'payer', invoiceId: '42' });
+    expect(error.toJSON()).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      message: 'payer is required',
+      context: { field: 'payer', invoiceId: '42' },
+      retryable: false,
+    });
   });
-  it("maps PayerReputationTooLow", () => {
-    const err = parseContractError("Error: PayerReputationTooLow");
-    expect(err).toBeInstanceOf(PayerReputationTooLowError);
+});
+
+describe('parseContractError', () => {
+  it.each([
+    ['InvalidDiscountRate', InvalidDiscountRateError, 'INVALID_DISCOUNT_RATE'],
+    ['TokenMismatch', TokenMismatchError, 'TOKEN_MISMATCH'],
+    ['PayerReputationTooLow', PayerReputationTooLowError, 'PAYER_REPUTATION_TOO_LOW'],
+  ])('maps %s and records the matched signature', (signature, ErrorType, code) => {
+    const raw = `Error(Contract, #1): ${signature}`;
+    const error = parseContractError(raw);
+
+    expect(error).toBeInstanceOf(ErrorType);
+    expect(error.code).toBe(code);
+    expect(error.context).toMatchObject({
+      rawContractError: raw,
+      matchedSignature: signature,
+    });
   });
-  it("maps generic errors", () => {
-    const err = parseContractError("UnknownXDRCode");
-    expect(err).toBeInstanceOf(GenericContractError);
+
+  it('retains the raw unknown contract error for debugging', () => {
+    const raw = { error: 'Error(Contract, #999)', diagnostic: 'opaque' };
+    const error = parseContractError(raw);
+
+    expect(error).toBeInstanceOf(GenericContractError);
+    expect(error.context.matchedSignature).toBeNull();
+    expect(String(error.context.rawContractError)).toContain('#999');
+    expect(error.cause).toBe(raw);
+  });
+});
+
+describe('normalizeError', () => {
+  it('returns an existing ILNError unchanged when no context is added', () => {
+    const source = new NetworkError();
+    expect(normalizeError(source)).toBe(source);
   });
 
-  describe("Structured SDK Error Classes", () => {
-    it("preserves prototype chain for instanceof checks", () => {
-      const balanceErr = new InsufficientBalanceError();
-      const networkErr = new NetworkError();
-      const txErr = new TransactionFailedError();
-      const valErr = new ValidationError();
-      const walletErr = new WalletNotConnectedError();
-
-      expect(balanceErr).toBeInstanceOf(InsufficientBalanceError);
-      expect(balanceErr).toBeInstanceOf(ILNError);
-      expect(balanceErr).toBeInstanceOf(Error);
-
-      expect(networkErr).toBeInstanceOf(NetworkError);
-      expect(networkErr).toBeInstanceOf(ILNError);
-
-      expect(txErr).toBeInstanceOf(TransactionFailedError);
-      expect(txErr).toBeInstanceOf(ILNError);
-
-      expect(valErr).toBeInstanceOf(ValidationError);
-      expect(valErr).toBeInstanceOf(ILNError);
-
-      expect(walletErr).toBeInstanceOf(WalletNotConnectedError);
-      expect(walletErr).toBeInstanceOf(ILNError);
+  it('merges operation context into an existing ILNError', () => {
+    const source = new NetworkError('RPC unavailable', undefined, { rpcUrl: 'test' });
+    const normalized = normalizeError(source, {
+      operation: 'getInvoice',
+      context: { invoiceId: '7' },
     });
 
-    it("has unique programmatic error codes", () => {
-      const balanceErr = new InsufficientBalanceError();
-      const networkErr = new NetworkError();
-      const txErr = new TransactionFailedError();
-      const valErr = new ValidationError();
-      const walletErr = new WalletNotConnectedError();
-
-      const codes = [
-        balanceErr.code,
-        networkErr.code,
-        txErr.code,
-        valErr.code,
-        walletErr.code,
-      ];
-
-      // Check unique codes
-      const uniqueCodes = new Set(codes);
-      expect(uniqueCodes.size).toBe(5);
-
-      expect(balanceErr.code).toBe("INSUFFICIENT_BALANCE");
-      expect(networkErr.code).toBe("NETWORK_ERROR");
-      expect(txErr.code).toBe("TRANSACTION_FAILED");
-      expect(valErr.code).toBe("VALIDATION_ERROR");
-      expect(walletErr.code).toBe("WALLET_NOT_CONNECTED");
+    expect(normalized.code).toBe('NETWORK_ERROR');
+    expect(normalized.context).toEqual({
+      rpcUrl: 'test',
+      operation: 'getInvoice',
+      invoiceId: '7',
     });
+  });
 
-    it("uses default descriptive messages and remediation strategies", () => {
-      const balanceErr = new InsufficientBalanceError();
-      expect(balanceErr.code).toBe("INSUFFICIENT_BALANCE");
-      expect(balanceErr.message).toBe("Insufficient balance to complete the transaction.");
-      expect(balanceErr.remediation).toBe("Ensure the account has enough funds, then retry.");
-      expect((balanceErr as any).docUrl).toContain("INSUFFICIENT_BALANCE");
+  it.each([
+    [new Error('fetch failed: ECONNREFUSED'), 'NETWORK_ERROR', true],
+    [new Error('insufficient balance for fee'), 'INSUFFICIENT_BALANCE', true],
+    [new TypeError('payer is required'), 'VALIDATION_ERROR', false],
+    [new Error('unclassified failure'), 'UNKNOWN_ERROR', false],
+  ])('normalizes unknown failures into ILNError', (source, code, retryable) => {
+    const error = normalizeError(source, { operation: 'submitInvoice' });
+    expect(error).toBeInstanceOf(ILNError);
+    expect(error.code).toBe(code);
+    expect(error.retryable).toBe(retryable);
+    expect(error.context.operation).toBe('submitInvoice');
+    expect(error.cause).toBe(source);
+  });
 
-
-
-      const networkErr = new NetworkError();
-      expect(networkErr.code).toBe("NETWORK_ERROR");
-      expect(networkErr.message).toBe("Network request failed.");
-      expect(networkErr.remediation).toContain("RPC endpoint");
-
-      const valErr = new ValidationError();
-      expect(valErr.code).toBe("VALIDATION_ERROR");
-      expect(valErr.message).toBe("Validation failed.");
-      expect(valErr.remediation).toContain("Validators");
-
-      const contractErr = parseContractError("Error: InvalidDiscountRate");
-      expect(contractErr.code).toBe("INVALID_DISCOUNT_RATE");
-      expect(contractErr.context).toMatchObject({ matchedPattern: "InvalidDiscountRate" });
+  it('normalizes contract errors through the same public path', () => {
+    const error = toILNError('HostFunction failed: TokenMismatch', {
+      operation: 'fundInvoice',
     });
-
-    it("supports overriding custom messages and remediation strategies", () => {
-      const customMsg = "Custom validation error details";
-      const customRemedy = "Please enter valid address string";
-      const valErr = new ValidationError(customMsg, customRemedy);
-
-      expect(valErr.message).toBe(customMsg);
-      expect(valErr.remediation).toBe(customRemedy);
+    expect(error).toBeInstanceOf(TokenMismatchError);
+    expect(error.context).toMatchObject({
+      matchedSignature: 'TokenMismatch',
+      operation: 'fundInvoice',
     });
   });
 });
